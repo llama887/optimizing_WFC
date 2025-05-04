@@ -94,15 +94,21 @@ def pond_reward(grid: list[list[set[str]]]) -> float:
         measure_pond_flow(water_map, 'vertical')
     )
 
-    water_penalty = max(0, (0.4 - water_ratio)) * -200
-    pure_penalty = max(0, (0.3 - pure_ratio)) * -200
-    flow_penalty = max(0, (flow_length - 5)) * -100
-    shore_penalty = max(0, (shore_ratio - 0.2)) * -100
-    
     regions = calc_num_regions(water_map.astype(np.int8))
-    region_penalty = (regions - 1) * -50
 
-    total_reward = (water_penalty + pure_penalty + flow_penalty + shore_penalty + region_penalty)
+    IDEAL_WATER_RATIO = 0.4
+    IDEAL_PURE_RATIO = 0.3
+    IDEAL_SHORE_RATIO = 0.2
+    MAX_FLOW_LENGTH = 5
+    IDEAL_REGIONS = 1
+
+    water_penalty = -abs(water_ratio - IDEAL_WATER_RATIO) * 100
+    pure_penalty = -abs(pure_ratio - IDEAL_PURE_RATIO) * 100
+    shore_penalty = -max(0, shore_ratio - IDEAL_SHORE_RATIO) * 100
+    flow_penalty = -max(0, flow_length - MAX_FLOW_LENGTH) * 50
+    region_penalty = -abs(regions - IDEAL_REGIONS) * 50
+
+    total_reward = (water_penalty + pure_penalty + shore_penalty + flow_penalty + region_penalty)
 
     return total_reward
 

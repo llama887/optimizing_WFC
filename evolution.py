@@ -330,6 +330,32 @@ def objective(
                     qd_function=binary_percent_water if qd else None,
                 )
                 print(f"Target Path Length: {target_path_length}")
+            case "river":
+                base_env = WFCWrapper(
+                    map_length=MAP_LENGTH,
+                    map_width=MAP_WIDTH,
+                    tile_symbols=tile_symbols,
+                    adjacency_bool=adjacency_bool,
+                    num_tiles=num_tiles,
+                    tile_to_index=tile_to_index,
+                    reward=river_reward,
+                    deterministic=True,
+                    qd_function=None,  # Add QD function if needed
+                )
+                print("Running river task")
+            case "pond":
+                base_env = WFCWrapper(
+                    map_length=MAP_LENGTH,
+                    map_width=MAP_WIDTH,
+                    tile_symbols=tile_symbols,
+                    adjacency_bool=adjacency_bool,
+                    num_tiles=num_tiles,
+                    tile_to_index=tile_to_index,
+                    reward=pond_reward,
+                    deterministic=True,
+                    qd_function=None,  # Add QD function if needed
+                )
+                print("Running pond task")
             case _:
                 raise ValueError(f"{task} is not a defined task")
 
@@ -355,36 +381,94 @@ def objective(
     return total_reward - (0.001) * (end_time - start_time)
 
 
-def render_best_agent(env: WFCWrapper, best_agent: PopulationMember, tile_images):
-    """Renders the action sequence of the best agent."""
+def render_best_agent(env: WFCWrapper, best_agent: PopulationMember, tile_images, task_name: str = ""):
+    """Renders the action sequence of the best agent and saves the final map."""
     if not best_agent:
         print("No best agent found to render.")
         return
+    
     pygame.init()
-    SCREEN_WIDTH = env.map_width * 32  # Adjust screen size based on map
+    SCREEN_WIDTH = env.map_width * 32
     SCREEN_HEIGHT = env.map_length * 32
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Best Evolved WFC Map")
+    pygame.display.set_caption(f"Best Evolved WFC Map - {task_name}")
 
+    # Create a surface for saving the final map
+    final_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+    
     env.reset()
     total_reward = 0
     print("Rendering best agent's action sequence...")
+    
     for action in tqdm(best_agent.action_sequence, desc="Rendering Steps"):
         _, reward, terminate, truncate, _ = env.step(action)
         total_reward += reward
-        render_wfc_grid(env.grid, tile_images, screen=screen)
-        pygame.time.delay(5)  # Slightly faster rendering
+        
+        # Clear screen
+        screen.fill((0, 0, 0))
+        
+        # Render the current state
+        for y in range(env.map_length):
+            for x in range(env.map_width):
+                cell_set = env.grid[y][x]
+                if len(cell_set) == 1:  # Collapsed cell
+                    tile_name = next(iter(cell_set))
+                    if tile_name in tile_images:
+                        screen.blit(tile_images[tile_name], (x * 32, y * 32))
+                    else:
+                        # Fallback for missing tiles
+                        pygame.draw.rect(screen, (255, 0, 255), (x * 32, y * 32, 32, 32))
+                elif len(cell_set) == 0:  # Contradiction
+                    pygame.draw.rect(screen, (255, 0, 0), (x * 32, y * 32, 32, 32))
+                else:  # Superposition
+                    pygame.draw.rect(screen, (100, 100, 100), (x * 32, y * 32, 32, 32))
+        
+        pygame.display.flip()
+        
+        # Capture final frame if this is the last step
         if terminate or truncate:
+            # Make one more render pass to ensure final state is captured
+            screen.fill((0, 0, 0))
+            for y in range(env.map_length):
+                for x in range(env.map_width):
+                    cell_set = env.grid[y][x]
+                    if len(cell_set) == 1:
+                        tile_name = next(iter(cell_set))
+                        if tile_name in tile_images:
+                            screen.blit(tile_images[tile_name], (x * 32, y * 32))
+                            final_surface.blit(tile_images[tile_name], (x * 32, y * 32))
+                        else:
+                            pygame.draw.rect(screen, (255, 0, 255), (x * 32, y * 32, 32, 32))
+                            pygame.draw.rect(final_surface, (255, 0, 255), (x * 32, y * 32, 32, 32))
+                    elif len(cell_set) == 0:
+                        pygame.draw.rect(screen, (255, 0, 0), (x * 32, y * 32, 32, 32))
+                        pygame.draw.rect(final_surface, (255, 0, 0), (x * 32, y * 32, 32, 32))
+                    else:
+                        pygame.draw.rect(screen, (100, 100, 100), (x * 32, y * 32, 32, 32))
+                        pygame.draw.rect(final_surface, (100, 100, 100), (x * 32, y * 32, 32, 32))
+            pygame.display.flip()
             break
 
+    # Save the final rendered map
+    if task_name:
+        os.makedirs("wfc_reward_img", exist_ok=True)
+        filename = f"wfc_reward_img/{task_name}_{best_agent.reward:.2f}.png"
+        pygame.image.save(final_surface, filename)
+        print(f"Saved final map to {filename}")
+    
     print(f"Final map reward for the best agent: {total_reward:.4f}")
-    print(
-        f"Best agent reward during evolution: {best_agent.reward:.4f}"
-    )  # Print the reward recorded during evolution
+    print(f"Best agent reward during evolution: {best_agent.reward:.4f}")
 
     # Keep the window open for a bit
     print("Displaying final map for 5 seconds...")
-    pygame.time.delay(5000)
+    start_time = time.time()
+    while time.time() - start_time < 5:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                return
+        pygame.display.flip()
+    
     pygame.quit()
 
 
@@ -580,17 +664,25 @@ if __name__ == "__main__":
     if best_agent:
         print("\nInitializing Pygame for rendering the best map...")
         pygame.init()
-        render_best_agent(env, best_agent, tile_images)
+        task_name = "_".join([task for task in args.task])
+        render_best_agent(env, best_agent, tile_images, task_name)
     else:
         print("\nNo best agent was found during the process.")
 
     AGENT_DIR = "agents"
     os.makedirs(AGENT_DIR, exist_ok=True)
     # save the best agent in a .pkl file
-    with open(
-        f"{AGENT_DIR}/best_evolved_{'_'.join([task for task in args.task])}_agent.pkl",
-        "wb",
-    ) as f:
-        pickle.dump(best_agent, f)
+    if best_agent:
+        task_str = "_".join([task for task in args.task])
+        filename = f"{AGENT_DIR}/best_evolved_{task_str}_reward_{best_agent.reward:.2f}_agent.pkl"
+        with open(filename, "wb") as f:
+            pickle.dump({
+                'agent': best_agent,
+                'task': args.task,
+                'reward': best_agent.reward,
+                'generations': generations if 'generations' in locals() else None,
+                'hyperparameters': hyperparams if hyperparams else None
+            }, f)
+        print(f"Saved best agent to {filename}")
 
     print("Script finished.")

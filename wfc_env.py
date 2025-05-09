@@ -66,9 +66,7 @@ def grid_to_array(
                     arr[y, x] = -1.0  # Should not happen if tile_to_index is correct
             elif num_options == 0:
                 # Contradiction cell
-                arr[
-                    y, x
-                ] = -2.0  # Use a different value for contradiction? Or stick to -1? Let's use -1.
+                arr[y, x] = -2.0  # Use a different value for contradiction? Or stick to -1? Let's use -1.
                 arr[y, x] = -1.0
             else:
                 # Undecided cell
@@ -98,6 +96,7 @@ class WFCWrapper(gym.Env):
         num_tiles: int,
         tile_to_index: dict[str, int],
         reward: Callable[[list[list[set[str]]]], tuple[float, dict[str, Any]]],
+        max_reward: float = 0.0,
         deterministic: bool = True,
         qd_function: Callable[[list[list[set[str]]]], float] | None = None,
         tile_images: dict[str, pygame.Surface] | None = None,
@@ -113,6 +112,7 @@ class WFCWrapper(gym.Env):
         self.tile_to_index = tile_to_index
         self.deterministic = deterministic
         self.reward = reward
+        self.max_reward = max_reward
         self.qd_function = qd_function
         self.tile_size = tile_size
         self.tile_images = tile_images
@@ -218,6 +218,12 @@ class WFCWrapper(gym.Env):
         # Calculate reward using the updated grid and initial longest path
         if terminated:
             reward, info = self.reward(self.grid)
+            if self.max_reward > 0:
+                assert reward <= self.max_reward, (
+                    f"Reward {reward} exceeds max reward {self.max_reward}"
+                )
+            if reward == self.max_reward:
+                info["achieved_max_reward"] = True
             if self.qd_function is not None:
                 qd_score = self.qd_function(self.grid)
                 info["qd_score"] = qd_score

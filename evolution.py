@@ -22,17 +22,18 @@ from biome_adjacency_rules import create_adjacency_matrix
 from tasks.binary_task import binary_percent_water, binary_reward
 from tasks.river_task import river_reward
 from tasks.pond_task import pond_reward
+from tasks.grass_task import grass_reward
+from tasks.hill_task import hill_reward
+
 from wfc import (  # We might not need render_wfc_grid if we keep console rendering
     load_tile_images,
     render_wfc_grid,
 )
 from wfc_env import CombinedReward, WFCWrapper
 
-
 class CrossOverMethod(Enum):
     UNIFORM = 0
     ONE_POINT = 1
-
 
 class PopulationMember:
     def __init__(self, env: WFCWrapper):
@@ -88,6 +89,7 @@ class PopulationMember:
 
     def run_action_sequence(self):
         self.reward = 0
+        self.env.reset()
         for idx, action in enumerate(self.action_sequence):
             _, reward, terminate, truncate, info = self.env.step(action)
             self.reward += reward
@@ -210,6 +212,11 @@ def evolve(
             population[best_idx].info.get("achieved_max_reward", False)
             or patience_counter >= patience
         ):
+            print(f"[DEBUG] Converged at generation {gen}")
+            task_str = getattr(env.reward, '__name__', type(env.reward).__name__)
+            with open("convergence_summary.csv", "a") as f:
+                f.write(f"{task_str},{gen}\n")
+
             return population, best_agent, gen, best_agent_rewards, median_agent_rewards
 
         # 3) Selection
@@ -356,6 +363,32 @@ def objective(
                     qd_function=None,  # Add QD function if needed
                 )
                 print("Running pond task")
+            case "grass":
+                base_env = WFCWrapper(
+                    map_length=MAP_LENGTH,
+                    map_width=MAP_WIDTH,
+                    tile_symbols=tile_symbols,
+                    adjacency_bool=adjacency_bool,
+                    num_tiles=num_tiles,
+                    tile_to_index=tile_to_index,
+                    reward=grass_reward,
+                    deterministic=True,
+                    qd_function=None,  # Add QD function if needed
+                )
+                print("Running pond task")
+            case "hill":
+                base_env = WFCWrapper(
+                    map_length=MAP_LENGTH,
+                    map_width=MAP_WIDTH,
+                    tile_symbols=tile_symbols,
+                    adjacency_bool=adjacency_bool,
+                    num_tiles=num_tiles,
+                    tile_to_index=tile_to_index,
+                    reward=hill_reward,
+                    deterministic=True,
+                    qd_function=None,  # Add QD function if needed
+                )
+                print("Running pond task")
             case _:
                 raise ValueError(f"{task} is not a defined task")
 
@@ -422,7 +455,7 @@ def render_best_agent(env: WFCWrapper, best_agent: PopulationMember, tile_images
                     pygame.draw.rect(screen, (255, 0, 0), (x * 32, y * 32, 32, 32))
                 else:  # Superposition
                     pygame.draw.rect(screen, (100, 100, 100), (x * 32, y * 32, 32, 32))
-        
+
         pygame.display.flip()
         
         # Capture final frame if this is the last step
@@ -458,6 +491,13 @@ def render_best_agent(env: WFCWrapper, best_agent: PopulationMember, tile_images
     
     print(f"Final map reward for the best agent: {total_reward:.4f}")
     print(f"Best agent reward during evolution: {best_agent.reward:.4f}")
+
+    if best_agent.reward >= -1.0:
+        best_agent.info["achieved_max_reward"] = True
+        print("Max reward of 0 achieved! Agent truly converged.")
+    else:
+        best_agent.info["achieved_max_reward"] = False
+        print("Max reward NOT achieved. Agent stopped early without solving the task.")
 
     # Keep the window open for a bit
     print("Displaying final map for 5 seconds...")
@@ -526,12 +566,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--task",
         action="append",
-        default=["binary_easy"],
-        choices=["binary_easy", "binary_hard", "river", "pond"],
-        help="The task being optimized. Used to pick reward. Pick from: binary_easy, binary_hard, river, pond ect.",
+        default=[],
+        choices=["binary_easy", "binary_hard", "river", "pond", "grass", "hill"],
+        help="The task being optimized. Used to pick reward. Pick from: binary_easy, binary_hard, river, pond ect. Specify one or more --task flags to combine tasks."
+    )
+    parser.add_argument(
+        "--override-patience",
+        type=int,
+        default=None,
+        help="Override the patience setting from YAML."
     )
 
     args = parser.parse_args()
+    if not args.task:
+        args.task = ["binary_easy"]
 
     # Define environment parameters
     MAP_LENGTH = 15
@@ -545,7 +593,14 @@ if __name__ == "__main__":
         "binary_hard": partial(binary_reward, target_path_length=50, hard=True),
         "river": river_reward,
         "pond": pond_reward,
+        "grass": grass_reward,
+        "hill": hill_reward,
     }
+    
+    if len(args.task) == 1:
+        selected_reward = task_rewards[args.task[0]]
+    else:
+        selected_reward = CombinedReward([task_rewards[task] for task in args.task]) # partial(binary_reward, target_path_length=30),
 
     # Create the WFC environment instance
     env = WFCWrapper(
@@ -555,9 +610,7 @@ if __name__ == "__main__":
         adjacency_bool=adjacency_bool,
         num_tiles=num_tiles,
         tile_to_index=tile_to_index,
-        reward=CombinedReward(
-            [task_rewards[task] for task in args.task]
-        ),  # partial(binary_reward, target_path_length=30),
+        reward=selected_reward,
         deterministic=True,
         # qd_function=binary_percent_water if args.qd else None,
     )
@@ -572,6 +625,8 @@ if __name__ == "__main__":
         try:
             with open(args.load_hyperparameters, "r") as f:
                 hyperparams = yaml.safe_load(f)
+                if args.override_patience is not None:
+                    hyperparams["patience"] = args.override_patience
             print("Successfully loaded hyperparameters:", hyperparams)
 
             print(
@@ -610,14 +665,16 @@ if __name__ == "__main__":
         print(f"Evolution finished in {end_time - start_time:.2f} seconds.")
         print(f"Evolved for a total of {generations} generations")
         assert len(best_agent_rewards) == len(median_agent_rewards)
+        task_str = "_".join(args.task)  # Combine task names
+
         x_axis = np.arange(1, len(median_agent_rewards) + 1)
         plt.plot(x_axis, best_agent_rewards, label="Best Agent Per Generation")
         plt.plot(x_axis, median_agent_rewards, label="Median Agent Per Generation")
         plt.legend()
-        plt.title("Agent Performance Over Generations")
+        plt.title(f"Performance Over Generations: {task_str}")
         plt.xlabel("Generations")
         plt.ylabel("Reward")
-        plt.savefig("agent_performance_over_generations.png")
+        plt.savefig(f"agent_performance_over_generations_{task_str}.png")
         plt.close()
 
     elif not args.best_agent_pickle:
@@ -664,7 +721,7 @@ if __name__ == "__main__":
     if best_agent:
         print("\nInitializing Pygame for rendering the best map...")
         pygame.init()
-        task_name = "_".join([task for task in args.task])
+        task_name = "_".join(args.task)
         render_best_agent(env, best_agent, tile_images, task_name)
     else:
         print("\nNo best agent was found during the process.")
@@ -673,7 +730,7 @@ if __name__ == "__main__":
     os.makedirs(AGENT_DIR, exist_ok=True)
     # save the best agent in a .pkl file
     if best_agent:
-        task_str = "_".join([task for task in args.task])
+        task_str = "_".join(args.task)
         filename = f"{AGENT_DIR}/best_evolved_{task_str}_reward_{best_agent.reward:.2f}_agent.pkl"
         with open(filename, "wb") as f:
             pickle.dump({

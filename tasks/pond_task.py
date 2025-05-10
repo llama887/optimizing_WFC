@@ -65,6 +65,35 @@ def pond_reward(grid: list[list[set[str]]]) -> float:
         "shore_bl", "shore_br", "shore_lr", "shore_rl"
     }
 
+    def touches_edge(water_map):
+        return (np.any(water_map[0, :]) or np.any(water_map[-1, :]) or 
+               np.any(water_map[:, 0]) or np.any(water_map[:, -1]))
+
+    def count_largest_pond_cluster(water_map):
+        visited = np.zeros_like(water_map, dtype=bool)
+        max_cluster = 0
+
+        for y in range(water_map.shape[0]):
+            for x in range(water_map.shape[1]):
+                if water_map[y, x] and not visited[y, x]:
+                    queue = deque([(y, x)])
+                    visited[y, x] = True
+                    cluster_size = 1
+
+                    while queue:
+                        cy, cx = queue.popleft()
+                        for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                            ny, nx = cy + dy, cx + dx
+                            if (0 <= ny < water_map.shape[0] and 
+                                0 <= nx < water_map.shape[1]):
+                                if water_map[ny, nx] and not visited[ny, nx]:
+                                    visited[ny, nx] = True
+                                    queue.append((ny, nx))
+                                    cluster_size += 1
+
+                    max_cluster = max(max_cluster, cluster_size)
+        return max_cluster
+
     water_map = np.zeros((len(grid), len(grid[0])), dtype=bool)
     water_cells = 0
     shore_cells = 0
@@ -83,69 +112,60 @@ def pond_reward(grid: list[list[set[str]]]) -> float:
                         shore_cells += 1
 
     total_cells = len(grid) * len(grid[0])
-    if total_cells == 0:
+    if total_cells == 0 or touches_edge(water_map):
+        return -float('inf'), {}
+
+    MIN_PURE_WATER = 2
+    if pure_water_cells < MIN_PURE_WATER:
         return -float('inf'), {}
 
     water_ratio = water_cells / total_cells
     pure_ratio = pure_water_cells / total_cells
     shore_ratio = shore_cells / water_cells if water_cells > 0 else 0
-
     flow_length = max(
         measure_pond_flow(water_map, 'horizontal'),
         measure_pond_flow(water_map, 'vertical')
     )
-
     regions = calc_num_regions(water_map.astype(np.int8))
-
-    def count_largest_pond_cluster(water_map):
-        visited = np.zeros_like(water_map, dtype=bool)
-        max_cluster = 0
-
-        for y in range(water_map.shape[0]):
-            for x in range(water_map.shape[1]):
-                if water_map[y, x] and not visited[y, x]:
-                    queue = deque([(y, x)])
-                    visited[y, x] = True
-                    cluster_size = 1
-
-                    while queue:
-                        cy, cx = queue.popleft()
-                        for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                            ny, nx = cy + dy, cx + dx
-                            if 0 <= ny < water_map.shape[0] and 0 <= nx < water_map.shape[1]:
-                                if water_map[ny, nx] and not visited[ny, nx]:
-                                    visited[ny, nx] = True
-                                    queue.append((ny, nx))
-                                    cluster_size += 1
-
-                    max_cluster = max(max_cluster, cluster_size)
-
-        return max_cluster
-
     largest_cluster = count_largest_pond_cluster(water_map)
+    cluster_ratio = largest_cluster / water_cells if water_cells > 0 else 0
 
+    # Ideal parameters
     IDEAL_WATER_RATIO = 0.4
     IDEAL_PURE_RATIO = 0.3
     IDEAL_SHORE_RATIO = 0.2
     MAX_FLOW_LENGTH = 5
     IDEAL_REGIONS = 1
+    MIN_CLUSTER_RATIO = 0.7
 
-    water_penalty = -abs(water_ratio - IDEAL_WATER_RATIO) * 100
-    pure_penalty = -abs(pure_ratio - IDEAL_PURE_RATIO) * 100
-    shore_penalty = -max(0, shore_ratio - IDEAL_SHORE_RATIO) * 100
-    flow_penalty = -max(0, flow_length - MAX_FLOW_LENGTH) * 50
-    region_penalty = -abs(regions - IDEAL_REGIONS) * 50
+    # Balanced scoring
+    water_score = 100 * (1 - abs(water_ratio - IDEAL_WATER_RATIO)/IDEAL_WATER_RATIO)
+    pure_score = 100 * (1 - abs(pure_ratio - IDEAL_PURE_RATIO)/IDEAL_PURE_RATIO)
+    shore_score = 100 * max(0, 1 - max(0, shore_ratio - IDEAL_SHORE_RATIO)/IDEAL_SHORE_RATIO)
+    flow_score = 100 * max(0, 1 - max(0, flow_length - MAX_FLOW_LENGTH)/MAX_FLOW_LENGTH)
+    region_score = 100 * (1 - abs(regions - IDEAL_REGIONS))
+    cluster_score = 100 * min(1, cluster_ratio/MIN_CLUSTER_RATIO)
 
-    cluster_bonus = largest_cluster * 2
+    weights = {
+        'water': 0.25,
+        'pure': 0.25,
+        'shore': 0.15,
+        'flow': 0.10,
+        'region': 0.10,
+        'cluster': 0.15
+    }
 
     total_reward = (
-        water_penalty +
-        pure_penalty +
-        shore_penalty +
-        flow_penalty +
-        region_penalty +
-        cluster_bonus
+        water_score * weights['water'] +
+        pure_score * weights['pure'] +
+        shore_score * weights['shore'] +
+        flow_score * weights['flow'] +
+        region_score * weights['region'] +
+        cluster_score * weights['cluster']
     )
+
+    # Normalize to be between -100 and 0
+    total_reward = min(0, total_reward - 100)
 
     return total_reward, {
         "water_ratio": water_ratio,
@@ -154,7 +174,16 @@ def pond_reward(grid: list[list[set[str]]]) -> float:
         "flow_length": flow_length,
         "regions": regions,
         "largest_cluster": largest_cluster,
-        "reward": total_reward
+        "cluster_ratio": cluster_ratio,
+        "reward": total_reward,
+        "scores": {
+            "water": water_score,
+            "pure": pure_score,
+            "shore": shore_score,
+            "flow": flow_score,
+            "region": region_score,
+            "cluster": cluster_score
+        }
     }
 
 

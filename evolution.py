@@ -471,37 +471,16 @@ def render_best_agent(env: WFCWrapper, best_agent: PopulationMember, tile_images
         if path_indices and len(path_indices) > 1:
             print(f"Found path with {len(path_indices)} points")
 
-            # Convert indices to Pygame coordinates with better alignment
+            # Convert indices to Pygame coordinates (center of each tile)
             path_points = []
-            for i, idx in enumerate(path_indices):
+            for idx in path_indices:
                 if isinstance(idx, (list, tuple, np.ndarray)) and len(idx) >= 2:
-                    y, x = idx[0], idx[1]
-                    
-                    # Base center position
-                    center_x = x * 32 + 16
+                    y, x = idx[0], idx[1]  # Assuming (y, x) format
+                    center_x = x * 32 + 16  # Center of the tile
                     center_y = y * 32 + 16
-                    
-                    # Adjust based on neighboring tiles for better alignment
-                    if i > 0 and i < len(path_indices)-1:
-                        prev_y, prev_x = path_indices[i-1][0], path_indices[i-1][1]
-                        next_y, next_x = path_indices[i+1][0], path_indices[i+1][1]
-                        
-                        # Horizontal movement (left-right)
-                        if prev_x != next_x:
-                            center_y = y * 32 + 10  # Move path slightly up for horizontal segments
-                        
-                        # Vertical movement (up-down)
-                        elif prev_y != next_y:
-                            center_x = x * 32 + 10  # Move path slightly left for vertical segments
-                        
-                        # Corners
-                        else:
-                            # Keep centered for corners
-                            pass
-                    
                     path_points.append((center_x, center_y))
 
-            # Draw smooth path
+            # Draw smooth path using bezier curves if we have enough points
             if len(path_points) >= 3:
                 # Create a list of points for smooth curve
                 smooth_points = []

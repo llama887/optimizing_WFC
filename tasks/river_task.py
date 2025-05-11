@@ -31,11 +31,38 @@ def get_river_biome(grid: list[list[set[str]]]) -> str:
     water_ratio = water_cells / total_cells
     shore_ratio = shore_cells / water_cells if water_cells > 0 else 0
 
-    has_flow = measure_river_flow(grid, water_tiles) >= min(len(grid), len(grid[0])) * 0.75
+    # Require stronger flow evidence and limit water cluster size
+    flow_length = measure_river_flow(grid, water_tiles)
+    max_dimension = max(len(grid), len(grid[0]))
+    flow_quality = flow_length / max_dimension if max_dimension > 0 else 0
+    
+    # Check for large water clusters
+    has_large_cluster = check_large_water_clusters(grid, water_tiles, max_dimension)
 
-    if has_flow and 0.2 <= water_ratio <= 0.4 and shore_ratio <= 0.3:
+    if (flow_quality >= 0.75 and 
+        0.15 <= water_ratio <= 0.35 and 
+        shore_ratio <= 0.3 and
+        not has_large_cluster):
         return "river"
     return "unknown"
+
+def check_large_water_clusters(grid: list[list[set[str]]], water_tiles: set[str], max_dimension: int) -> bool:
+    """Returns True if there are large square water clusters (more than 2x2)"""
+    h, w = len(grid), len(grid[0])
+    water_map = np.zeros((h, w), dtype=bool)
+    
+    for y in range(h):
+        for x in range(w):
+            cell = grid[y][x]
+            if len(cell) == 1 and next(iter(cell)).lower() in water_tiles:
+                water_map[y, x] = True
+
+    # Check for 3x3 or larger water clusters
+    for y in range(h - 2):
+        for x in range(w - 2):
+            if (water_map[y:y+3, x:x+3].all()):
+                return True
+    return False
 
 def measure_river_flow(grid: list[list[set[str]]], water_tiles: set[str]) -> float:
     h, w = len(grid), len(grid[0])
@@ -113,46 +140,58 @@ def river_reward(grid: list[list[set[str]]]) -> tuple[float, dict]:
 
     regions = calc_num_regions(water_map.astype(np.int8))
 
-    def largest_cluster(wmap: np.ndarray) -> int:
-        visited = np.zeros_like(wmap, dtype=bool)
-        best = 0
-        for y in range(h):
+    # Calculate width of the river
+    def calculate_river_width(wmap: np.ndarray) -> float:
+        if flow_quality < 0.5:
+            return float('inf')  # Not a proper river
+        
+        # Determine primary flow direction
+        horizontal_flow = measure_flow(0)
+        vertical_flow = measure_flow(1)
+        is_horizontal = horizontal_flow > vertical_flow
+        
+        widths = []
+        if is_horizontal:
+            for y in range(h):
+                current_width = 0
+                max_width = 0
+                for x in range(w):
+                    if wmap[y, x]:
+                        current_width += 1
+                        max_width = max(max_width, current_width)
+                    else:
+                        current_width = 0
+                if max_width > 0:
+                    widths.append(max_width)
+        else:
             for x in range(w):
-                if wmap[y,x] and not visited[y,x]:
-                    size = 0
-                    dq = deque([(y,x)])
-                    visited[y,x] = True
-                    while dq:
-                        cy, cx = dq.popleft()
-                        size += 1
-                        for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]:
-                            ny, nx = cy+dy, cx+dx
-                            if (0 <= ny < h and 0 <= nx < w and 
-                                wmap[ny,nx] and not visited[ny,nx]):
-                                visited[ny,nx] = True
-                                dq.append((ny,nx))
-                    best = max(best, size)
-        return best
+                current_width = 0
+                max_width = 0
+                for y in range(h):
+                    if wmap[y, x]:
+                        current_width += 1
+                        max_width = max(max_width, current_width)
+                    else:
+                        current_width = 0
+                if max_width > 0:
+                    widths.append(max_width)
+        
+        return np.mean(widths) if widths else float('inf')
 
-    cluster_size = largest_cluster(water_map)
+    river_width = calculate_river_width(water_map)
 
-    # Calculate interior water tiles
-    interior = 0
-    for y in range(1, h-1):
-        for x in range(1, w-1):
-            if water_map[y, x] and all(
-                water_map[y+dy, x+dx] for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]
-            ):
-                interior += 1
-    interior_ratio = (interior / water_map.sum()) if water_map.sum() > 0 else 0.0
+    # Check for large water clusters
+    has_large_cluster = check_large_water_clusters(grid, water_tiles, max_dimension)
 
     # Reward parameters
-    IDEAL_WATER_RATIO_MIN = 0.2
-    IDEAL_WATER_RATIO_MAX = 0.4
+    IDEAL_WATER_RATIO_MIN = 0.15
+    IDEAL_WATER_RATIO_MAX = 0.35
     IDEAL_SHORE_RATIO = 0.3
     IDEAL_REGIONS = 1
+    IDEAL_WIDTH_MAX = 2.5  # Average width should not exceed 2.5 tiles
     MIN_FLOW_QUALITY = 0.75
-    FLOW_BONUS = 20
+    FLOW_BONUS = 30
+    WIDTH_PENALTY_MULTIPLIER = 50
 
     # Calculate penalties and bonuses
     if water_ratio < IDEAL_WATER_RATIO_MIN:
@@ -166,8 +205,12 @@ def river_reward(grid: list[list[set[str]]]) -> tuple[float, dict]:
     region_penalty = abs(regions - IDEAL_REGIONS) * -50
     flow_penalty = -100 if flow_quality < MIN_FLOW_QUALITY else 0
     flow_bonus = FLOW_BONUS if flow_quality >= MIN_FLOW_QUALITY else 0
-    cluster_bonus = cluster_size * 0.5
-    interior_bonus = interior_ratio * 20
+    
+    # Width penalty - heavily penalize wide rivers
+    width_penalty = max(0, river_width - IDEAL_WIDTH_MAX) * -WIDTH_PENALTY_MULTIPLIER
+    
+    # Large cluster penalty
+    cluster_penalty = -100 if has_large_cluster else 0
 
     # Combine all components
     raw_reward = (
@@ -176,8 +219,8 @@ def river_reward(grid: list[list[set[str]]]) -> tuple[float, dict]:
         + region_penalty
         + flow_penalty
         + flow_bonus
-        + cluster_bonus
-        + interior_bonus
+        + width_penalty
+        + cluster_penalty
     )
     total_reward = min(raw_reward, 0.0)  # Clamp at 0 (perfect score)
 
@@ -186,7 +229,7 @@ def river_reward(grid: list[list[set[str]]]) -> tuple[float, dict]:
         "shore_ratio": round(shore_ratio, 3),
         "flow_quality": round(flow_quality, 3),
         "regions": regions,
-        "cluster_size": cluster_size,
-        "interior_ratio": round(interior_ratio, 3),
+        "river_width": round(river_width, 2),
+        "has_large_cluster": has_large_cluster,
         "reward": total_reward,
     }

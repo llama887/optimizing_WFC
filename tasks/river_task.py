@@ -53,6 +53,7 @@ def river_reward(grid: list[list[set[str]]]) -> tuple[float, dict]:
         "shore_bl", "shore_br", "shore_lr", "shore_rl"
     }
 
+    # Create water map and count cells
     water_map = np.zeros((len(grid), len(grid[0])), dtype=bool)
     water_cells = 0
     shore_cells = 0
@@ -71,43 +72,115 @@ def river_reward(grid: list[list[set[str]]]) -> tuple[float, dict]:
     if total_cells == 0:
         return -float('inf'), {}
 
+    # Calculate basic ratios
     water_ratio = water_cells / total_cells
     shore_ratio = shore_cells / water_cells if water_cells > 0 else 0
 
+    # Check for flow patterns
     has_horizontal_flow = check_river_flow(grid, water_tiles, "horizontal")
     has_vertical_flow = check_river_flow(grid, water_tiles, "vertical")
     has_flow = has_horizontal_flow or has_vertical_flow
 
+    # Calculate river-specific metrics
     regions = calc_num_regions(water_map.astype(np.int8))
+    linearity = calculate_linearity(water_map) if has_flow else 0
+    meander_score = calculate_meander_score(water_map) if has_flow else 0
+    width_consistency = calculate_width_consistency(water_map) if has_flow else 0
 
-    IDEAL_WATER_RATIO_MIN = 0.2
-    IDEAL_WATER_RATIO_MAX = 0.4
-    IDEAL_SHORE_RATIO = 0.3
-    IDEAL_REGIONS = 1
+    # Ideal parameters
+    IDEAL_WATER_RATIO = 0.25  # Rivers should cover about 25% of the map
+    IDEAL_SHORE_RATIO = 0.2   # About 20% of water tiles should be shores
+    IDEAL_REGIONS = 1         # Single connected water region
+    IDEAL_LINEARITY = 0.7     # Rivers should be somewhat linear
+    IDEAL_MEANDER = 0.4       # Some gentle meandering is good
+    IDEAL_WIDTH = 0.8         # Consistent width is good for rivers
 
-    flow_penalty = 0 if has_flow else -100
+    # Calculate rewards and penalties
+    reward = 0
+    
+    # Base flow requirement (must have flow to be a river)
+    if not has_flow:
+        return -float('inf'), {"message": "No continuous flow detected"}
+    
+    # Water ratio scoring (bell curve around ideal)
+    water_ratio_diff = abs(water_ratio - IDEAL_WATER_RATIO)
+    reward += max(0, 100 - (water_ratio_diff * 400))
 
-    if water_ratio < IDEAL_WATER_RATIO_MIN:
-        water_penalty = (IDEAL_WATER_RATIO_MIN - water_ratio) * -200
-    elif water_ratio > IDEAL_WATER_RATIO_MAX:
-        water_penalty = (water_ratio - IDEAL_WATER_RATIO_MAX) * -200
-    else:
-        water_penalty = 0
+    # Shore ratio scoring
+    shore_diff = abs(shore_ratio - IDEAL_SHORE_RATIO)
+    reward += max(0, 50 - (shore_diff * 250))
 
-    shore_penalty = max(0, (shore_ratio - IDEAL_SHORE_RATIO)) * -100
-    region_penalty = abs(regions - IDEAL_REGIONS) * -50
-    flow_bonus = 20 if (has_horizontal_flow and has_vertical_flow) else 0
+    # Region scoring (strong penalty for multiple regions)
+    reward += (1 - min(regions, 5)) * 50  # 50 points for single region, decreasing
 
-    total_reward = flow_penalty + water_penalty + shore_penalty + region_penalty + flow_bonus
+    # River shape characteristics
+    if has_flow:
+        reward += linearity * 30 * IDEAL_LINEARITY
+        reward += meander_score * 20 * (1 - abs(IDEAL_MEANDER - meander_score))
+        reward += width_consistency * 30 * IDEAL_WIDTH
+        
+        # Bonus for having both directions (river delta)
+        if has_horizontal_flow and has_vertical_flow:
+            reward += 30
 
-    return min(total_reward, 0), {
+    # Ensure reward isn't negative
+    reward = max(reward, 0)
+
+    return reward, {
         "flow": has_flow,
         "regions": regions,
         "water_ratio": water_ratio,
         "shore_ratio": shore_ratio,
-        "flow_bonus": flow_bonus,
-        "reward": total_reward
+        "linearity": linearity,
+        "meander": meander_score,
+        "width_consistency": width_consistency,
+        "reward": reward
     }
+
+def calculate_linearity(water_map: np.ndarray) -> float:
+    """Calculate how straight the river is (0-1)"""
+    # Find all water cells
+    y, x = np.where(water_map)
+    if len(x) < 2:
+        return 0
+    
+    # Perform linear regression
+    slope, intercept = np.polyfit(x, y, 1)
+    predicted_y = slope * x + intercept
+    errors = np.abs(y - predicted_y)
+    
+    # Normalize error to 0-1 range
+    max_error = np.max(errors) if np.max(errors) > 0 else 1
+    linearity = 1 - (np.mean(errors) / max_error)
+    return linearity
+
+def calculate_meander_score(water_map: np.ndarray) -> float:
+    """Calculate how much the river meanders (0-1)"""
+    # Find the main path (simplified)
+    y, x = np.where(water_map)
+    if len(x) < 3:
+        return 0
+    
+    # Calculate the sinuosity (actual path length vs straight-line distance)
+    path_length = len(x)
+    straight_distance = np.sqrt((x[-1] - x[0])**2 + (y[-1] - y[0])**2)
+    sinuosity = path_length / straight_distance if straight_distance > 0 else 1
+    
+    # Normalize to 0-1 range (1 being very meandering)
+    return min(sinuosity / 1.5, 1)  # Cap at 1 even for very meandering rivers
+
+def calculate_width_consistency(water_map: np.ndarray) -> float:
+    """Calculate how consistent the river width is (0-1)"""
+    # For each column (or row), count the water cells
+    widths = np.sum(water_map, axis=0)
+    non_zero_widths = widths[widths > 0]
+    
+    if len(non_zero_widths) < 2:
+        return 0
+    
+    # Calculate coefficient of variation (lower is more consistent)
+    cv = np.std(non_zero_widths) / np.mean(non_zero_widths)
+    return 1 - min(cv, 1)  # Convert to 0-1 scale where 1 is most consistent
 
 def has_water_path(
     grid: list[list[set[str]]], start: tuple, end: tuple, water_tiles: set[str]

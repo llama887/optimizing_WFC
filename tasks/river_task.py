@@ -192,15 +192,15 @@ def river_reward(grid: list[list[set[str]]]) -> tuple[float, dict]:
     flow_bonus = 30 if flow_quality >= MIN_FLOW_QUALITY else 0
 
     # Combine rewards
-    total_reward = min(
+    raw = (
         water_penalty +
         shore_penalty +
         width_penalty +
         connectivity_penalty +
         cluster_penalty +
-        flow_bonus,
-        0.0  # Cap at 0 (perfect score)
+        flow_bonus
     )
+    total_reward = min(raw, 0)
 
     return total_reward, {
         "water_ratio": round(water_ratio, 3),

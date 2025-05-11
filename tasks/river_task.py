@@ -95,36 +95,41 @@ def river_reward(grid: list[list[set[str]]]) -> tuple[float, dict]:
     IDEAL_MEANDER = 0.4       # Some gentle meandering is good
     IDEAL_WIDTH = 0.8         # Consistent width is good for rivers
 
-    # Calculate rewards and penalties
-    reward = 0
+    # Initialize penalty (we'll subtract from 0)
+    penalty = 0
     
     # Base flow requirement (must have flow to be a river)
     if not has_flow:
         return -float('inf'), {"message": "No continuous flow detected"}
     
-    # Water ratio scoring (bell curve around ideal)
+    # Water ratio penalty (difference from ideal)
     water_ratio_diff = abs(water_ratio - IDEAL_WATER_RATIO)
-    reward += max(0, 100 - (water_ratio_diff * 400))
+    penalty += water_ratio_diff * 400  # Increased penalty for deviation
 
-    # Shore ratio scoring
+    # Shore ratio penalty
     shore_diff = abs(shore_ratio - IDEAL_SHORE_RATIO)
-    reward += max(0, 50 - (shore_diff * 250))
+    penalty += shore_diff * 250
 
-    # Region scoring (strong penalty for multiple regions)
-    reward += (1 - min(regions, 5)) * 50  # 50 points for single region, decreasing
+    # Region penalty (strong penalty for multiple regions)
+    penalty += (regions - 1) * 50  # 0 for single region, increasing with more regions
 
-    # River shape characteristics
+    # River shape characteristics penalties
     if has_flow:
-        reward += linearity * 30 * IDEAL_LINEARITY
-        reward += meander_score * 20 * (1 - abs(IDEAL_MEANDER - meander_score))
-        reward += width_consistency * 30 * IDEAL_WIDTH
+        # Penalize deviation from ideal linearity
+        penalty += abs(linearity - IDEAL_LINEARITY) * 30
         
-        # Bonus for having both directions (river delta)
-        if has_horizontal_flow and has_vertical_flow:
-            reward += 30
+        # Penalize deviation from ideal meandering
+        penalty += abs(meander_score - IDEAL_MEANDER) * 20
+        
+        # Penalize deviation from ideal width consistency
+        penalty += abs(width_consistency - IDEAL_WIDTH) * 30
+        
+        # Additional penalty if the river doesn't have both directions
+        if not (has_horizontal_flow and has_vertical_flow):
+            penalty += 30
 
-    # Ensure reward isn't negative
-    reward = max(reward, 0)
+    # The reward is the negative of the penalty (best is 0)
+    reward = -penalty
 
     return reward, {
         "flow": has_flow,

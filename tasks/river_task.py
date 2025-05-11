@@ -30,7 +30,7 @@ def get_river_biome(grid: list[list[set[str]]]) -> str:
     has_flow = check_river_flow(grid, water_tiles, "horizontal") or \
                check_river_flow(grid, water_tiles, "vertical")
 
-    if has_flow and 0.2 <= water_ratio <= 0.4 and shore_ratio <= 0.3:
+    if has_flow and 0.15 <= water_ratio <= 0.5 and shore_ratio <= 0.4:
         return "river"
     return "unknown"
 
@@ -85,11 +85,11 @@ def river_reward(grid: list[list[set[str]]]) -> tuple[float, dict]:
     branching_factor = calculate_branching_factor(water_map)
 
     # Ideal parameters
-    IDEAL_WATER_RATIO_MIN = 0.2
-    IDEAL_WATER_RATIO_MAX = 0.4
-    IDEAL_SHORE_RATIO = 0.3
-    MIN_LENGTH_RATIO = 0.6  # River should span at least 60% of grid
-    MIN_ASPECT_RATIO = 3.0  # Minimum width/height ratio
+    IDEAL_WATER_RATIO_MIN = 0.15
+    IDEAL_WATER_RATIO_MAX = 0.5
+    IDEAL_SHORE_RATIO = 0.4
+    MIN_LENGTH_RATIO = 0.5 
+    MIN_ASPECT_RATIO = 2.0 
     MAX_COMPACTNESS = 0.3   # Maximum allowed compactness (0=line, 1=circle)
     MAX_BRANCHING = 2       # Maximum allowed branching points
 

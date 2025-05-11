@@ -27,23 +27,45 @@ def get_river_biome(grid: list[list[set[str]]]) -> str:
     water_ratio = water_cells / total_cells
     shore_ratio = shore_cells / water_cells if water_cells > 0 else 0
 
-    has_flow = check_river_flow(grid, water_tiles, "horizontal") or \
-               check_river_flow(grid, water_tiles, "vertical")
+    # Check all possible flow directions (including diagonals)
+    has_flow = (
+        check_river_flow(grid, water_tiles, "horizontal") or
+        check_river_flow(grid, water_tiles, "vertical") or
+        check_river_flow(grid, water_tiles, "diagonal_tl_br") or
+        check_river_flow(grid, water_tiles, "diagonal_tr_bl")
+    )
 
-    if has_flow and 0.15 <= water_ratio <= 0.5 and shore_ratio <= 0.4:
+    # More lenient conditions for rivers
+    if (has_flow and 
+        0.1 <= water_ratio <= 0.6 and  # Expanded water ratio range
+        shore_ratio <= 0.5 and          # More allowed shore tiles
+        has_significant_flow(grid, water_tiles)):  # Additional check
         return "river"
     return "unknown"
 
 def check_river_flow(
-    grid: list[list[set[str]]], water_tiles: set[str], direction: str
+    grid: list[list[set[str]]], 
+    water_tiles: set[str], 
+    direction: str
 ) -> bool:
+    height = len(grid)
+    width = len(grid[0]) if height > 0 else 0
+    
     if direction == "horizontal":
-        for y in range(len(grid)):
-            if has_water_path(grid, (0, y), (len(grid[0]) - 1, y), water_tiles):
+        for y in range(height):
+            if has_water_path(grid, (0, y), (width - 1, y), water_tiles):
                 return True
-    else:
-        for x in range(len(grid[0])):
-            if has_water_path(grid, (x, 0), (x, len(grid) - 1), water_tiles):
+    elif direction == "vertical":
+        for x in range(width):
+            if has_water_path(grid, (x, 0), (x, height - 1), water_tiles):
+                return True
+    elif direction == "diagonal_tl_br":  # Top-left to bottom-right
+        for offset in range(-width + 1, height):
+            if has_diagonal_path(grid, water_tiles, offset, "tl_br"):
+                return True
+    elif direction == "diagonal_tr_bl":  # Top-right to bottom-left
+        for offset in range(-width + 1, height):
+            if has_diagonal_path(grid, water_tiles, offset, "tr_bl"):
                 return True
     return False
 
@@ -300,4 +322,134 @@ def has_water_path(
                 visited.add((x, y))
                 queue.append((x, y))
 
+    return False
+
+def has_diagonal_path(
+    grid: list[list[set[str]]],
+    water_tiles: set[str],
+    offset: int,
+    diagonal_type: str
+) -> bool:
+    height = len(grid)
+    width = len(grid[0])
+    min_continuous = min(width, height) * 0.5  # Require 50% continuous
+    
+    continuous = 0
+    max_continuous = 0
+    
+    if diagonal_type == "tl_br":
+        for y in range(height):
+            x = y - offset
+            if 0 <= x < width:
+                if (len(grid[y][x]) == 1 and 
+                    next(iter(grid[y][x])).lower() in water_tiles):
+                    continuous += 1
+                    max_continuous = max(max_continuous, continuous)
+                else:
+                    continuous = 0
+    else:  # "tr_bl"
+        for y in range(height):
+            x = (width - 1) - (y - offset)
+            if 0 <= x < width:
+                if (len(grid[y][x]) == 1 and 
+                    next(iter(grid[y][x])).lower() in water_tiles):
+                    continuous += 1
+                    max_continuous = max(max_continuous, continuous)
+                else:
+                    continuous = 0
+                    
+    return max_continuous >= min_continuous
+
+def has_significant_flow(
+    grid: list[list[set[str]]],
+    water_tiles: set[str]
+) -> bool:
+    """Check if water forms a significant flow path with some width"""
+    water_map = np.zeros((len(grid), len(grid[0])), dtype=bool)
+    for y in range(len(grid)):
+        for x in range(len(grid[0])):
+            if len(grid[y][x]) == 1 and next(iter(grid[y][x])).lower() in water_tiles:
+                water_map[y, x] = True
+    
+    # Check if water connects two opposite sides with some width
+    height, width = water_map.shape
+    
+    # Check left-right connection
+    left_side = water_map[:, 0]
+    right_side = water_map[:, -1]
+    if np.any(left_side) and np.any(right_side):
+        for y1 in np.where(left_side)[0]:
+            for y2 in np.where(right_side)[0]:
+                if has_wide_path(water_map, (0, y1), (width-1, y2), min(width, height)//4):
+                    return True
+    
+    # Check top-bottom connection
+    top_side = water_map[0, :]
+    bottom_side = water_map[-1, :]
+    if np.any(top_side) and np.any(bottom_side):
+        for x1 in np.where(top_side)[0]:
+            for x2 in np.where(bottom_side)[0]:
+                if has_wide_path(water_map, (x1, 0), (x2, height-1), min(width, height)//4):
+                    return True
+    
+    # Check diagonal connections
+    if (has_diagonal_flow(water_map, "tl_br") or 
+        has_diagonal_flow(water_map, "tr_bl")):
+        return True
+        
+    return False
+
+def has_wide_path(
+    water_map: np.ndarray,
+    start: tuple,
+    end: tuple,
+    min_width: int
+) -> bool:
+    """Check if there's a path with at least min_width water cells"""
+    # Simplified version - could be enhanced with proper width calculation
+    # For now just check multiple parallel paths
+    paths_found = 0
+    for offset in range(-min_width//2, min_width//2 + 1):
+        x1, y1 = start
+        x2, y2 = end
+        if 0 <= y1 + offset < water_map.shape[0]:
+            if has_path(water_map, (x1, y1 + offset), (x2, y2 + offset)):
+                paths_found += 1
+        if paths_found >= min(2, min_width):
+            return True
+    return False
+
+def has_diagonal_flow(water_map: np.ndarray, diagonal_type: str) -> bool:
+    """Check for significant diagonal flow with some width"""
+    height, width = water_map.shape
+    min_continuous = min(width, height) * 0.6  # 60% of map length
+    
+    if diagonal_type == "tl_br":
+        # Check top-left to bottom-right diagonal
+        for offset in range(-width//2, width//2):
+            continuous = 0
+            max_continuous = 0
+            for y in range(height):
+                x = y - offset
+                if 0 <= x < width and water_map[y, x]:
+                    continuous += 1
+                    max_continuous = max(max_continuous, continuous)
+                else:
+                    continuous = 0
+            if max_continuous >= min_continuous:
+                return True
+    else:  # "tr_bl"
+        # Check top-right to bottom-left diagonal
+        for offset in range(-width//2, width//2):
+            continuous = 0
+            max_continuous = 0
+            for y in range(height):
+                x = (width - 1) - (y - offset)
+                if 0 <= x < width and water_map[y, x]:
+                    continuous += 1
+                    max_continuous = max(max_continuous, continuous)
+                else:
+                    continuous = 0
+            if max_continuous >= min_continuous:
+                return True
     return False

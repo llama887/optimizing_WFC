@@ -1,6 +1,6 @@
 import numpy as np
 from collections import deque
-from .utils import calc_num_regions
+from .utils import calc_num_regions, percent_target_tiles_excluding_excluded_tiles
 
 def get_pond_biome(grid: list[list[set[str]]]) -> str:
     water_tiles = {
@@ -58,132 +58,124 @@ def measure_pond_flow(water_map: np.ndarray, direction: str) -> int:
                     current = 0
     return max_length
 
-def pond_reward(grid: list[list[set[str]]]) -> float:
+def pond_reward(grid: list[list[set[str]]]) -> tuple[float, dict]:
     water_tiles = {
-        "water", "water_tl", "water_tr", "water_t", "water_l", "water_r",
-        "water_bl", "water_b", "water_br", "shore_tl", "shore_tr",
-        "shore_bl", "shore_br", "shore_lr", "shore_rl"
+        "water","water_tl","water_tr","water_t","water_l","water_r",
+        "water_bl","water_b","water_br",
+        "shore_tl","shore_tr","shore_bl","shore_br","shore_lr","shore_rl"
     }
 
-    def touches_edge(water_map):
-        return (np.any(water_map[0, :]) or np.any(water_map[-1, :]) or 
-               np.any(water_map[:, 0]) or np.any(water_map[:, -1]))
+    h, w = len(grid), len(grid[0])
+    water_map = np.zeros((h, w), dtype=bool)
+    for y in range(h):
+        for x in range(w):
+            cell = grid[y][x]
+            if len(cell)==1 and next(iter(cell)).lower() in water_tiles:
+                water_map[y, x] = True
 
-    def count_largest_pond_cluster(water_map):
-        visited = np.zeros_like(water_map, dtype=bool)
-        max_cluster = 0
+    # empty‐grid guard
+    if h==0 or w==0:
+        return -float("inf"), {}
 
-        for y in range(water_map.shape[0]):
-            for x in range(water_map.shape[1]):
-                if water_map[y, x] and not visited[y, x]:
-                    queue = deque([(y, x)])
-                    visited[y, x] = True
-                    cluster_size = 1
-
-                    while queue:
-                        cy, cx = queue.popleft()
-                        for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                            ny, nx = cy + dy, cx + dx
-                            if (0 <= ny < water_map.shape[0] and 
-                                0 <= nx < water_map.shape[1]):
-                                if water_map[ny, nx] and not visited[ny, nx]:
-                                    visited[ny, nx] = True
-                                    queue.append((ny, nx))
-                                    cluster_size += 1
-
-                    max_cluster = max(max_cluster, cluster_size)
-        return max_cluster
-
-    water_map = np.zeros((len(grid), len(grid[0])), dtype=bool)
-    water_cells = 0
-    shore_cells = 0
-    pure_water_cells = 0
-
-    for y in range(len(grid)):
-        for x in range(len(grid[0])):
-            if len(grid[y][x]) == 1:
-                tile = next(iter(grid[y][x])).lower()
-                if tile in water_tiles:
-                    water_map[y, x] = True
-                    water_cells += 1
-                    if tile == "water":
-                        pure_water_cells += 1
-                    if "shore" in tile:
-                        shore_cells += 1
-
-    total_cells = len(grid) * len(grid[0])
-    if total_cells == 0 or touches_edge(water_map):
-        return -float('inf'), {}
-
-    MIN_PURE_WATER = 2
-    if pure_water_cells < MIN_PURE_WATER:
-        return -float('inf'), {}
-
-    water_ratio = water_cells / total_cells
-    pure_ratio = pure_water_cells / total_cells
-    shore_ratio = shore_cells / water_cells if water_cells > 0 else 0
-    flow_length = max(
-        measure_pond_flow(water_map, 'horizontal'),
-        measure_pond_flow(water_map, 'vertical')
+    water_ratio = percent_target_tiles_excluding_excluded_tiles(
+        grid,
+        is_target_tiles=lambda t: t.lower() in water_tiles,
+        exclude_prefixes=["path"],
     )
+
+    def measure_run(mask: np.ndarray, axis: int) -> int:
+        best = 0
+        if axis == 0:
+            for row in mask:
+                run = 0
+                for v in row:
+                    run = run + 1 if v else 0
+                    best = max(best, run)
+        else:
+            for col in mask.T:
+                run = 0
+                for v in col:
+                    run = run + 1 if v else 0
+                    best = max(best, run)
+        return best
+
+    flow_length = max(measure_run(water_map, 0), measure_run(water_map, 1))
+
     regions = calc_num_regions(water_map.astype(np.int8))
-    largest_cluster = count_largest_pond_cluster(water_map)
-    cluster_ratio = largest_cluster / water_cells if water_cells > 0 else 0
 
-    # Ideal parameters
-    IDEAL_WATER_RATIO = 0.4
-    IDEAL_PURE_RATIO = 0.3
-    IDEAL_SHORE_RATIO = 0.2
-    MAX_FLOW_LENGTH = 5
-    IDEAL_REGIONS = 1
-    MIN_CLUSTER_RATIO = 0.7
+    def largest_cluster(wmap: np.ndarray) -> int:
+        visited = np.zeros_like(wmap, dtype=bool)
+        best = 0
+        for yy in range(h):
+            for xx in range(w):
+                if wmap[yy,xx] and not visited[yy,xx]:
+                    size = 0
+                    dq = deque([(yy,xx)])
+                    visited[yy,xx] = True
+                    while dq:
+                        cy, cx = dq.popleft(); size += 1
+                        for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]:
+                            ny, nx = cy+dy, cx+dx
+                            if (
+                                0 <= ny < h and 0 <= nx < w
+                                and wmap[ny,nx] and not visited[ny,nx]
+                            ):
+                                visited[ny,nx] = True
+                                dq.append((ny,nx))
+                    best = max(best, size)
+        return best
 
-    # Balanced scoring
-    water_score = 100 * (1 - abs(water_ratio - IDEAL_WATER_RATIO)/IDEAL_WATER_RATIO)
-    pure_score = 100 * (1 - abs(pure_ratio - IDEAL_PURE_RATIO)/IDEAL_PURE_RATIO)
-    shore_score = 100 * max(0, 1 - max(0, shore_ratio - IDEAL_SHORE_RATIO)/IDEAL_SHORE_RATIO)
-    flow_score = 100 * max(0, 1 - max(0, flow_length - MAX_FLOW_LENGTH)/MAX_FLOW_LENGTH)
-    region_score = 100 * (1 - abs(regions - IDEAL_REGIONS))
-    cluster_score = 100 * min(1, cluster_ratio/MIN_CLUSTER_RATIO)
+    cluster_size = largest_cluster(water_map)
 
-    weights = {
-        'water': 0.25,
-        'pure': 0.25,
-        'shore': 0.15,
-        'flow': 0.10,
-        'region': 0.10,
-        'cluster': 0.15
-    }
+    total_water = int(water_map.sum())
+    interior = 0
+    for y in range(1, h-1):
+        for x in range(1, w-1):
+            if water_map[y, x] and all(
+                water_map[y+dy, x+dx] for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]
+            ):
+                interior += 1
+    interior_ratio = (interior / total_water) if total_water > 0 else 0.0
 
-    total_reward = (
-        water_score * weights['water'] +
-        pure_score * weights['pure'] +
-        shore_score * weights['shore'] +
-        flow_score * weights['flow'] +
-        region_score * weights['region'] +
-        cluster_score * weights['cluster']
+    MIN_WATER_RATIO    = 0.3
+    MAX_FLOW_LENGTH    = 5    
+    IDEAL_REGIONS      = 1
+    IDEAL_INTERIOR     = 0.5  
+
+    water_penalty    = -(MIN_WATER_RATIO - water_ratio) * 100 if water_ratio < MIN_WATER_RATIO else 0
+    flow_penalty     = -max(0, flow_length - MAX_FLOW_LENGTH) * 30
+    region_penalty   = -abs(regions - IDEAL_REGIONS) * 500
+    interior_penalty = -abs(interior_ratio - IDEAL_INTERIOR) * 100
+    cluster_bonus    = cluster_size * 2
+    presence_bonus   = water_ratio * 50
+
+    hill_ratio = percent_target_tiles_excluding_excluded_tiles(
+        grid,
+        is_target_tiles=lambda t: t.lower().startswith("hill"),
+        exclude_prefixes=["path"]
     )
+    hill_penalty = -hill_ratio * 200
 
-    # Normalize to be between -100 and 0
-    total_reward = min(0, total_reward - 100)
+    # --- combine & clamp so perfect achievable = 0 ---
+    raw = (
+        water_penalty
+      + flow_penalty
+      + region_penalty
+      + interior_penalty
+      + cluster_bonus
+      + presence_bonus
+      + hill_penalty
+    )
+    total_reward = min(raw, 0.0)
 
     return total_reward, {
-        "water_ratio": water_ratio,
-        "pure_ratio": pure_ratio,
-        "shore_ratio": shore_ratio,
-        "flow_length": flow_length,
-        "regions": regions,
-        "largest_cluster": largest_cluster,
-        "cluster_ratio": cluster_ratio,
-        "reward": total_reward,
-        "scores": {
-            "water": water_score,
-            "pure": pure_score,
-            "shore": shore_score,
-            "flow": flow_score,
-            "region": region_score,
-            "cluster": cluster_score
-        }
+        "water_ratio":    round(water_ratio, 3),
+        "flow_length":    flow_length,
+        "regions":        regions,
+        "interior_ratio": round(interior_ratio, 3),
+        "cluster_size":   cluster_size,
+        "hill_ratio":     round(hill_ratio, 3),
+        "reward":         total_reward,
     }
 
 

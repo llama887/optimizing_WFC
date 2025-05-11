@@ -220,3 +220,38 @@ def has_path(water_map: np.ndarray, start: tuple, end: tuple) -> bool:
                     queue.append((nx, ny))
     
     return False
+
+def has_water_path(
+    grid: list[list[set[str]]], start: tuple, end: tuple, water_tiles: set[str]
+) -> bool:
+    """Check if there's a continuous water path between two points."""
+    from collections import deque
+
+    water_map = np.zeros((len(grid), len(grid[0])), dtype=bool)
+    for y in range(len(grid)):
+        for x in range(len(grid[0])):
+            if len(grid[y][x]) == 1 and next(iter(grid[y][x])).lower() in water_tiles:
+                water_map[y, x] = True
+
+    if not water_map[start[1], start[0]] or not water_map[end[1], end[0]]:
+        return False
+
+    visited = set()
+    queue = deque([start])
+    visited.add(start)
+
+    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+    while queue:
+        current = queue.popleft()
+        if current == end:
+            return True
+
+        for dx, dy in directions:
+            x, y = current[0] + dx, current[1] + dy
+            if (0 <= x < len(grid[0]) and 0 <= y < len(grid) 
+                and water_map[y, x] and (x, y) not in visited):
+                visited.add((x, y))
+                queue.append((x, y))
+
+    return False

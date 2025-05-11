@@ -93,40 +93,40 @@ def river_reward(grid: list[list[set[str]]]) -> tuple[float, dict]:
     MAX_COMPACTNESS = 0.3   # Maximum allowed compactness (0=line, 1=circle)
     MAX_BRANCHING = 2       # Maximum allowed branching points
 
-    # Penalties and bonuses
-    region_penalty = (regions - 1) * -300  # Very heavy penalty for multiple regions
+    # Penalties (all negative)
+    region_penalty = (regions - 1) * -100  # Penalty for multiple regions
     
     if water_ratio < IDEAL_WATER_RATIO_MIN:
-        water_penalty = (IDEAL_WATER_RATIO_MIN - water_ratio) * -200
+        water_penalty = (IDEAL_WATER_RATIO_MIN - water_ratio) * -100
     elif water_ratio > IDEAL_WATER_RATIO_MAX:
-        water_penalty = (water_ratio - IDEAL_WATER_RATIO_MAX) * -200
+        water_penalty = (water_ratio - IDEAL_WATER_RATIO_MAX) * -100
     else:
         water_penalty = 0
 
-    shore_penalty = max(0, (shore_ratio - IDEAL_SHORE_RATIO)) * -100
-    aspect_penalty = -100 if aspect_ratio < MIN_ASPECT_RATIO else 0
-    compactness_penalty = max(0, (compactness - MAX_COMPACTNESS)) * -150
-    branching_penalty = max(0, (branching_factor - MAX_BRANCHING)) * -50
+    shore_penalty = max(0, (shore_ratio - IDEAL_SHORE_RATIO)) * -50
+    aspect_penalty = -50 if aspect_ratio < MIN_ASPECT_RATIO else 0
+    compactness_penalty = max(0, (compactness - MAX_COMPACTNESS)) * -75
+    branching_penalty = max(0, (branching_factor - MAX_BRANCHING)) * -25
     
-    # Length rewards
+    # Bonuses (positive but capped by penalties)
     length_bonus = 0
     if norm_length >= MIN_LENGTH_RATIO:
-        length_bonus = 150 * (norm_length - MIN_LENGTH_RATIO) / (1 - MIN_LENGTH_RATIO)
+        length_bonus = 50 * (norm_length - MIN_LENGTH_RATIO) / (1 - MIN_LENGTH_RATIO)
     
-    # Bonus for connecting opposite sides
     connects_sides = check_connects_opposite_sides(water_map)
-    connection_bonus = 80 if connects_sides else 0
+    connection_bonus = 30 if connects_sides else 0
 
-    # Bonus for straightness (less meandering)
-    straightness_bonus = 50 * (1 - compactness) if norm_length >= MIN_LENGTH_RATIO else 0
+    straightness_bonus = 25 * (1 - compactness) if norm_length >= MIN_LENGTH_RATIO else 0
 
-    total_reward = (
+    # Calculate total reward (capped at 0)
+    total_reward = min(
         region_penalty + water_penalty + shore_penalty + 
         aspect_penalty + compactness_penalty + branching_penalty +
-        length_bonus + connection_bonus + straightness_bonus
+        length_bonus + connection_bonus + straightness_bonus,
+        0
     )
 
-    return min(max(total_reward, -300), 300), {
+    return total_reward, {
         "regions": regions,
         "water_ratio": water_ratio,
         "shore_ratio": shore_ratio,

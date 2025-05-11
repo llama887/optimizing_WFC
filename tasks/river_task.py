@@ -78,19 +78,23 @@ def river_reward(grid: list[list[set[str]]]) -> tuple[float, dict]:
     regions = calc_num_regions(water_map.astype(np.int8))
 
     # Calculate river metrics
-    river_length = calculate_river_length_simple(water_map)
+    river_length = calculate_river_length(water_map)
     norm_length = river_length / max(len(grid), len(grid[0]))
     aspect_ratio = calculate_aspect_ratio(water_map)
+    compactness = calculate_compactness(water_map)
+    branching_factor = calculate_branching_factor(water_map)
 
     # Ideal parameters
     IDEAL_WATER_RATIO_MIN = 0.2
     IDEAL_WATER_RATIO_MAX = 0.4
     IDEAL_SHORE_RATIO = 0.3
-    MIN_LENGTH_RATIO = 0.6  # River should span at least 60% of the longer grid dimension
-    MIN_ASPECT_RATIO = 3.0  # Minimum width/height ratio to be considered river-like
+    MIN_LENGTH_RATIO = 0.6  # River should span at least 60% of grid
+    MIN_ASPECT_RATIO = 3.0  # Minimum width/height ratio
+    MAX_COMPACTNESS = 0.3   # Maximum allowed compactness (0=line, 1=circle)
+    MAX_BRANCHING = 2       # Maximum allowed branching points
 
     # Penalties and bonuses
-    region_penalty = (regions - 1) * -200  # Heavily penalize multiple regions
+    region_penalty = (regions - 1) * -300  # Very heavy penalty for multiple regions
     
     if water_ratio < IDEAL_WATER_RATIO_MIN:
         water_penalty = (IDEAL_WATER_RATIO_MIN - water_ratio) * -200
@@ -101,39 +105,81 @@ def river_reward(grid: list[list[set[str]]]) -> tuple[float, dict]:
 
     shore_penalty = max(0, (shore_ratio - IDEAL_SHORE_RATIO)) * -100
     aspect_penalty = -100 if aspect_ratio < MIN_ASPECT_RATIO else 0
+    compactness_penalty = max(0, (compactness - MAX_COMPACTNESS)) * -150
+    branching_penalty = max(0, (branching_factor - MAX_BRANCHING)) * -50
     
     # Length rewards
     length_bonus = 0
     if norm_length >= MIN_LENGTH_RATIO:
-        length_bonus = 100 * (norm_length - MIN_LENGTH_RATIO) / (1 - MIN_LENGTH_RATIO)
+        length_bonus = 150 * (norm_length - MIN_LENGTH_RATIO) / (1 - MIN_LENGTH_RATIO)
     
     # Bonus for connecting opposite sides
     connects_sides = check_connects_opposite_sides(water_map)
-    connection_bonus = 50 if connects_sides else 0
+    connection_bonus = 80 if connects_sides else 0
+
+    # Bonus for straightness (less meandering)
+    straightness_bonus = 50 * (1 - compactness) if norm_length >= MIN_LENGTH_RATIO else 0
 
     total_reward = (
         region_penalty + water_penalty + shore_penalty + 
-        aspect_penalty + length_bonus + connection_bonus
+        aspect_penalty + compactness_penalty + branching_penalty +
+        length_bonus + connection_bonus + straightness_bonus
     )
 
-    return min(max(total_reward, -200), 200), {
+    return min(max(total_reward, -300), 300), {
         "regions": regions,
         "water_ratio": water_ratio,
         "shore_ratio": shore_ratio,
         "river_length": river_length,
         "norm_length": norm_length,
         "aspect_ratio": aspect_ratio,
+        "compactness": compactness,
+        "branching_factor": branching_factor,
         "connects_sides": connects_sides,
         "region_penalty": region_penalty,
         "water_penalty": water_penalty,
         "shore_penalty": shore_penalty,
         "aspect_penalty": aspect_penalty,
+        "compactness_penalty": compactness_penalty,
+        "branching_penalty": branching_penalty,
         "length_bonus": length_bonus,
         "connection_bonus": connection_bonus,
+        "straightness_bonus": straightness_bonus,
         "reward": total_reward
     }
 
-def calculate_river_length_simple(water_map: np.ndarray) -> int:
+def calculate_compactness(water_map: np.ndarray) -> float:
+    """Calculate how compact the water shape is (0 = line, 1 = circle)."""
+    water_cells = np.sum(water_map)
+    if water_cells < 2:
+        return 0
+    
+    # Get bounding box
+    rows = np.any(water_map, axis=1)
+    cols = np.any(water_map, axis=0)
+    y_min, y_max = np.where(rows)[0][[0, -1]]
+    x_min, x_max = np.where(cols)[0][[0, -1]]
+    bbox_area = (y_max - y_min + 1) * (x_max - x_min + 1)
+    
+    return water_cells / bbox_area
+
+def calculate_branching_factor(water_map: np.ndarray) -> int:
+    """Count how many branching points exist in the water."""
+    if not water_map.any():
+        return 0
+    
+    branching_points = 0
+    for y in range(1, len(water_map)-1):
+        for x in range(1, len(water_map[0])-1):
+            if water_map[y, x]:
+                # Count adjacent water cells
+                neighbors = (water_map[y-1, x] + water_map[y+1, x] + 
+                            water_map[y, x-1] + water_map[y, x+1])
+                if neighbors > 2:  # Junction point
+                    branching_points += 1
+    return branching_points
+
+def calculate_river_length(water_map: np.ndarray) -> int:
     """Calculate river length using a simple BFS approach."""
     if not water_map.any():
         return 0
